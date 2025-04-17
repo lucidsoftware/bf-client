@@ -70,6 +70,7 @@ type Queue struct {
 	dispatched   numValue
 	workersSort  int
 	workersView  int
+	compact      bool
 	settings     *settings
 }
 
@@ -104,6 +105,7 @@ func NewQueue(a *client.App, selected int) *Queue {
 		queue:       numValue{fmt: "Queue: %v", mode: 2},
 		dispatched:  numValue{fmt: "Dispatched: %v", mode: 3},
 		workersSort: 2, // Sort by execution stage by default
+		compact:     true,
 	}
 	meter.SubTitle = &workersTitle{q: q}
 	q.stats.Focused = true
@@ -214,6 +216,8 @@ func (v *Queue) Handle(e ui.Event) View {
 			v.workersSort += len(workersSorts) - 1
 			v.workersSort %= len(workersSorts)
 		}
+	case "c":
+		v.compact = !v.compact
 		/*
 		  case "S":
 		    return NewServerTest(v.a, v)
@@ -366,7 +370,7 @@ func (v Queue) Render() []ui.Drawable {
 
 	var info ui.Drawable
 	if v.stats.SelectedRow == 0 {
-		info = renderWorkersInfo(&s, v.meter, d.width, v.h, v.workersSort, v.workersView)
+		info = renderWorkersInfo(&s, v.meter, d.width, v.h, v.workersSort, v.workersView, v.compact)
 	} else {
 		plot := widgets.NewPlot()
 		plot.Data = make([][]float64, 1)
@@ -543,7 +547,7 @@ func sortWorkers(profiles []*profileResult, sort int) []*profileResult {
 }
 
 // List needs work on draw, flip for only background, etc
-func renderWorkersInfo(s *stats, meter *client.List, x int, h int, sort int, view int) ui.Drawable {
+func renderWorkersInfo(s *stats, meter *client.List, x int, h int, sort int, view int, compact bool) ui.Drawable {
 	meter.SelectedRowStyle = ui.NewStyle(ui.ColorBlack, ui.ColorWhite)
 	height := Min(len(s.profiles), h-6)
 	meter.SetRect(x, 4, x+161, 4+height+2)
@@ -563,7 +567,7 @@ func renderWorkersInfo(s *stats, meter *client.List, x int, h int, sort int, vie
 	plen := len(profiles)
 	rows := make([]fmt.Stringer, plen)
 	for _, p := range profiles {
-		rows[n] = renderWorkerRow(p, wl, view)
+		rows[n] = renderWorkerRow(p, wl, view, compact)
 		n++
 	}
 	meter.Rows = rows
@@ -587,7 +591,7 @@ func countBar(used int, slots int) string {
 	return fmt.Sprintf(format_string, used, slots)
 }
 
-func renderWorkerRow(r *profileResult, wl int, view int) Worker {
+func renderWorkerRow(r *profileResult, wl int, view int, compact bool) Worker {
 	var profile *bfpb.WorkerProfileMessage
 	if r == nil {
 		r = &profileResult{profile: &bfpb.WorkerProfileMessage{}, stale: 1, message: "uninitialized"}
@@ -624,11 +628,14 @@ func renderWorkerRow(r *profileResult, wl int, view int) Worker {
 	row += name + ": ["
 	fetchCountBar := countBar(input_fetch_used, input_fetch_slots)
 	maxWidth := len(countBar(input_fetch_slots, input_fetch_slots))
-	if input_fetch_used > maxWidth {
+	if compact && input_fetch_used > maxWidth {
 		row += strings.Repeat(" ", maxWidth-len(fetchCountBar))
 		row += fetchCountBar + "]("
 	} else {
-		width := Min(input_fetch_slots, maxWidth)
+		width := input_fetch_slots
+		if compact {
+			width = Min(input_fetch_slots, maxWidth)
+		}
 		row += strings.Repeat(" ", width-input_fetch_used)
 		row += strings.Repeat("#", input_fetch_used) + "]("
 	}
@@ -642,11 +649,14 @@ func renderWorkerRow(r *profileResult, wl int, view int) Worker {
 	// need to consider size of screen and skip the closing bar if we're over
 	executeCount := false
 	executeCountBar := countBar(execute_action_used, execute_action_slots)
-	if execute_action_used > len(executeCountBar) {
+	if compact && execute_action_used > len(executeCountBar) {
 		row += executeCountBar + "]("
 		executeCount = true
 	} else {
-		width := Min(execute_action_slots, len(executeCountBar))
+		width := execute_action_slots
+		if compact {
+			width = Min(execute_action_slots, len(executeCountBar))
+		}
 		row += strings.Repeat("#", execute_action_used)
 		padding := width - execute_action_used
 		if padding > 0 {
@@ -664,8 +674,17 @@ func renderWorkerRow(r *profileResult, wl int, view int) Worker {
 		row += "fg:" + execute_color
 	}
 	row += ")["
-	row += strings.Repeat("#", report_result_used)
-	row += strings.Repeat(" ", report_result_slots-report_result_used) + "]("
+	reportCountBar := countBar(report_result_used, report_result_slots)
+	if compact && report_result_used > len(reportCountBar) {
+		row += reportCountBar + "]("
+	} else {
+		width := report_result_slots
+		if compact {
+			width = Min(report_result_slots, len(reportCountBar))
+		}
+		row += strings.Repeat("#", report_result_used)
+		row += strings.Repeat(" ", width-report_result_used) + "]("
+	}
 	if report_result_used == report_result_slots {
 		row += "fg:black,mod:dim,bg:green"
 	} else {
