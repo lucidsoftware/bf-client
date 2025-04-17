@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-var workersSorts = []string{"Executions", "Name"}
+var workersSorts = []string{"Name", "Fetches", "Executions", "Reports"}
 var workersViews = []string{"Slots", "Actions"}
 
 type profileResult struct {
@@ -103,7 +103,7 @@ func NewQueue(a *client.App, selected int) *Queue {
 		prequeue:    numValue{fmt: "Prequeue: %v", mode: 1},
 		queue:       numValue{fmt: "Queue: %v", mode: 2},
 		dispatched:  numValue{fmt: "Dispatched: %v", mode: 3},
-		workersSort: 0,
+		workersSort: 2, // Sort by execution stage by default
 	}
 	meter.SubTitle = &workersTitle{q: q}
 	q.stats.Focused = true
@@ -483,38 +483,40 @@ func (w Worker) String() string {
 }
 
 func sortWorkers(profiles []*profileResult, sort int) []*profileResult {
-	exec_used := func(profileResult *profileResult) int {
-		if profileResult == nil {
-			return -1
-		}
-		profile := profileResult.profile
-		for _, stage := range profile.Stages {
-			if stage.Name == "ExecuteActionStage" {
-				return int(stage.SlotsUsed)
+	stage_compare := func(stageName string) func(w1, w2 *profileResult) bool {
+		stage_used := func(profileResult *profileResult) int {
+			if profileResult == nil {
+				return -1
 			}
-		}
-		return 0
-	}
-	exec_avail := func(profileResult *profileResult) int {
-		if profileResult == nil {
-			return -1
-		}
-		profile := profileResult.profile
-		for _, stage := range profile.Stages {
-			if stage.Name == "ExecuteActionStage" {
-				return int(stage.SlotsConfigured)
+			profile := profileResult.profile
+			for _, stage := range profile.Stages {
+				if stage.Name == stageName {
+					return int(stage.SlotsUsed)
+				}
 			}
+			return 0
 		}
-		return 0
-	}
-	exec := func(w1, w2 *profileResult) bool {
-		if exec_used(w1) == exec_used(w2) {
-			if exec_avail(w1) == exec_avail(w2) {
-				return w1.name < w2.name
+		stage_avail := func(profileResult *profileResult) int {
+			if profileResult == nil {
+				return -1
 			}
-			return exec_avail(w1) < exec_avail(w2)
+			profile := profileResult.profile
+			for _, stage := range profile.Stages {
+				if stage.Name == stageName {
+					return int(stage.SlotsConfigured)
+				}
+			}
+			return 0
 		}
-		return exec_used(w1) < exec_used(w2)
+		return func(w1, w2 *profileResult) bool {
+			if stage_used(w1) == stage_used(w2) {
+				if stage_avail(w1) == stage_avail(w2) {
+					return w1.name < w2.name
+				}
+				return stage_avail(w1) < stage_avail(w2)
+			}
+			return stage_used(w1) < stage_used(w2)
+		}
 	}
 	name := func(w1, w2 *profileResult) bool {
 		w1name, w2name := w1.name, w2.name
@@ -526,11 +528,16 @@ func sortWorkers(profiles []*profileResult, sort int) []*profileResult {
 		}
 		return w1name > w2name
 	}
-	if sort == 0 {
-		byProfile(exec).Sort(profiles)
-	} else {
-		byProfile(name).Sort(profiles)
+
+	// Needs to match labels in workersSorts
+	sort_funcs := []func(w1, w2 *profileResult) bool{
+		name,
+		stage_compare("InputFetchStage"),
+		stage_compare("ExecuteActionStage"),
+		stage_compare("ReportResultStage"),
 	}
+
+	byProfile(sort_funcs[sort]).Sort(profiles)
 
 	return profiles
 }
