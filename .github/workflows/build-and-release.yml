@@ -1,0 +1,70 @@
+name: Build and Release BF Client
+
+# We use this action to build the client when we make changes so it is easily downloadable by chef on buildfarm servers
+
+on:
+  push:
+    branches:
+      - lucid
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Bazel
+        uses: bazel-contrib/setup-bazel@0.8.5
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}
+          repository-cache: true
+
+      - name: Build ARM client
+        run: bazel build //:client --platforms=@io_bazel_rules_go//go/toolchain:linux_arm64
+
+      - name: Generate release tag
+        id: tag
+        run: |
+          TAG="v$(date +'%Y.%m.%d')-${GITHUB_SHA::7}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+
+      - name: Rename binary to bf-client
+        run: cp bazel-bin/client_/client bf-client
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: BF Client Release ${{ steps.tag.outputs.date }}
+          body: |
+            Automated release of bf-client binary (ARM architecture)
+
+            Built from commit: ${{ github.sha }}
+            Branch: ${{ github.ref_name }}
+
+            ## Download Latest Release
+            Always get the latest version:
+            ```bash
+            wget https://github.com/${{ github.repository }}/releases/latest/download/bf-client
+            chmod +x bf-client
+            ```
+
+            ## Usage
+            ```bash
+            ./bf-client <redis-host> <reapi-host> [ca-cert]
+            ```
+            Example:
+            ```bash
+            ./bf-client buildfarm-valkey-cluster-green.tcvrey.clustercfg.use1.cache.amazonaws.com:6379 localhost:8980
+            ```
+          files: bf-client
+          draft: false
+          prerelease: false
